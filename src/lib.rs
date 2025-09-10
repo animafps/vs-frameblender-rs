@@ -9,9 +9,6 @@ use rustsynth_derive::vapoursynth_plugin;
 use std::cmp::max;
 use std::fmt::Debug;
 
-#[cfg(feature = "simd")]
-use std::arch::x86_64::*;
-
 #[vapoursynth_plugin]
 mod plugin {
     use rustsynth::{ffi, plugin::PluginConfigFlags, MakeVersion};
@@ -35,12 +32,16 @@ mod plugin {
         const NAME: &'static str = "Blend";
         const ARGS: &'static str = "clip:vnode;weights:float[]:opt;";
         const RETURNTYPE: &'static str = "clip:vnode;";
-        const MODE: FilterMode = FilterMode::ParallelRequests;
+        const MODE: FilterMode = FilterMode::Parallel;
 
         fn from_args(args: &Map, _core: &CoreRef) -> Result<Self, String> {
             let input_node = args.get_node("clip")?;
 
             let mut weights = args.get_float_array("weights").unwrap();
+
+            if weights.len() % 2 == 0 {
+                return Err("Weights array must have an odd number of elements".to_string());
+            }
 
             let half = (weights.len() as f32 / 2.0).round() as i32;
 
