@@ -24,7 +24,7 @@ mod plugin {
     #[vapoursynth_filter(video)]
     struct FrameBlender {
         input_node: Node,
-        weights: Vec<f64>,
+        weights: Vec<i32>,
         half: i32,
     }
 
@@ -37,22 +37,20 @@ mod plugin {
         fn from_args(args: &Map, _core: &CoreRef) -> Result<Self, String> {
             let input_node = args.get_node("clip")?;
 
-            let mut weights = args.get_float_array("weights").unwrap();
+            let weights_f64 = args.get_float_array("weights").unwrap();
 
-            if weights.len() % 2 == 0 {
+            if weights_f64.len() % 2 == 0 {
                 return Err("Weights array must have an odd number of elements".to_string());
             }
 
-            let half = (weights.len() as f32 / 2.0).round() as i32;
+            let half = (weights_f64.len() as f32 / 2.0).round() as i32;
 
-            let mut total_weights = 0.0;
-            for i in 0..weights.len() {
-                total_weights += weights[i];
-            }
-
-            for i in 0..weights.len() {
-                weights[i] /= total_weights;
-            }
+            // Normalize weights and convert to fixed-point integers (16.16 format)
+            let total_weight: f64 = weights_f64.iter().sum();
+            let weights: Vec<i32> = weights_f64
+                .iter()
+                .map(|&w| ((w / total_weight) * 65536.0) as i32)
+                .collect();
             Ok(Self {
                 input_node,
                 weights,
@@ -87,7 +85,7 @@ mod plugin {
         ) -> Result<Frame<'core>, String> {
             let mut frame_num = n - self.half;
             let mut source_frames = Vec::new();
-            for _ in 0..=self.weights.len() {
+            for _ in 0..self.weights.len() {
                 let frame = self
                     .input_node
                     .get_frame_filter(max(0, frame_num), &frame_ctx)
@@ -121,7 +119,7 @@ mod plugin {
     impl FrameBlender {
         fn frame_blend<T>(&self, srcs: &Vec<Frame>, dst: &mut Frame, plane: i32)
         where
-            T: TryFrom<i32> + Copy + Into<f64>,
+            T: TryFrom<i32> + Copy + Into<i32>,
             <T as TryFrom<i32>>::Error: Debug,
         {
             let height = dst.get_height(plane);
@@ -137,17 +135,18 @@ mod plugin {
 
             let mut dst_ptr = dst.get_write_ptr(plane) as *mut T;
 
+            // Fallback scalar implementation
             let max_val = (1 << (size_of::<T>() * 8)) - 1;
             for _h in 0..height {
                 for w in 0..width as usize {
-                    let mut acc = 0.0;
+                    let mut acc = 0i64;
                     for i in 0..num_srcs {
                         unsafe {
-                            let val: f64 = (*frame_data_ptrs[i].wrapping_add(w)).into();
-                            acc += val * self.weights[i];
+                            let val = (*frame_data_ptrs[i].wrapping_add(w)).into();
+                            acc += (val * self.weights[i]) as i64;
                         }
                     }
-                    let actual_acc = (acc as i32).clamp(0, max_val);
+                    let actual_acc = ((acc >> 16) as i32).clamp(0, max_val);
                     unsafe {
                         dst_ptr
                             .wrapping_add(w)
