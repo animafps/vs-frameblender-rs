@@ -10,6 +10,18 @@ use std::cmp::max;
 use std::fmt::Debug;
 use std::arch::x86_64::*;
 
+#[inline]
+fn is_avx2_available() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        is_x86_feature_detected!("avx2")
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        false
+    }
+}
+
 #[vapoursynth_plugin]
 mod plugin {
     use rustsynth::{ffi, plugin::PluginConfigFlags, MakeVersion};
@@ -106,9 +118,17 @@ mod plugin {
             let num_planes = vf.num_planes;
             for plane in 0..num_planes {
                 if vf.bytes_per_sample == 2 {
-                    self.frame_blend::<u16>(&source_frames, &mut dst, plane);
+                    if is_avx2_available() {
+                        unsafe { self.frame_blend_u16_avx2(&source_frames, &mut dst, plane); }
+                    } else {
+                        self.frame_blend::<u16>(&source_frames, &mut dst, plane);
+                    }
                 } else if vf.bytes_per_sample == 1 {
-                    self.frame_blend::<u8>(&source_frames, &mut dst, plane);
+                    if is_avx2_available() {
+                        unsafe { self.frame_blend_u8_avx2(&source_frames, &mut dst, plane); }
+                    } else {
+                        self.frame_blend::<u8>(&source_frames, &mut dst, plane);
+                    }
                 } else {
                     return Err("Unsupported bytes per sample".to_string());
                 }
@@ -128,7 +148,7 @@ mod plugin {
             let width = dst.get_width(plane);
             let num_srcs = self.weights.len();
 
-            let mut frame_data_ptrs = Vec::with_capacity(num_srcs);
+            let mut frame_data_ptrs = Vec::new();
             for frame in srcs {
                 let data = frame.get_read_ptr(plane) as *const T;
                 frame_data_ptrs.push(data);
@@ -155,6 +175,177 @@ mod plugin {
                 }
                 for i in 0..num_srcs {
                     unsafe { frame_data_ptrs[i] = frame_data_ptrs.get_unchecked(i).wrapping_add(stride as usize) };
+                }
+                dst_ptr = dst_ptr.wrapping_add(stride as usize);
+            }
+        }
+
+        #[target_feature(enable = "avx2")]
+        unsafe fn frame_blend_u8_avx2(&self, srcs: &Vec<Frame>, dst: &mut Frame, plane: i32) {
+            let height = dst.get_height(plane);
+            let stride = dst.get_stride(plane);
+            let width = dst.get_width(plane);
+            let num_srcs = self.weights.len();
+
+            let mut frame_data_ptrs = Vec::new();
+            for frame in srcs {
+                let data = frame.get_read_ptr(plane);
+                frame_data_ptrs.push(data);
+            }
+
+            let mut dst_ptr = dst.get_write_ptr(plane);
+
+            for _h in 0..height {
+                let mut w = 0;
+                
+                // Process 32 pixels at a time with AVX2
+                while w + 32 <= width as usize {
+                    
+                    let mut acc_0 = _mm256_setzero_si256();
+                    let mut acc_1 = _mm256_setzero_si256();
+                    let mut acc_2 = _mm256_setzero_si256();
+                    let mut acc_3 = _mm256_setzero_si256();
+                    
+                    for i in 0..num_srcs {
+                        let src_ptr = frame_data_ptrs[i].wrapping_add(w);
+                        
+                        // Load 32 u8 pixels as a 256-bit register
+                        let pixels_256 = _mm256_loadu_si256(src_ptr as *const __m256i);
+                        
+                        // Split into low and high 128-bit parts
+                        let pixels_lo = _mm256_extracti128_si256(pixels_256, 0);
+                        let pixels_hi = _mm256_extracti128_si256(pixels_256, 1);
+                        
+                        // Convert u8 to u16 for both halves
+                        let pixels_lo_u16 = _mm256_cvtepu8_epi16(pixels_lo);
+                        let pixels_hi_u16 = _mm256_cvtepu8_epi16(pixels_hi);
+                        
+                        // Split u16 to u32 for multiplication
+                        let pixels_0 = _mm256_unpacklo_epi16(pixels_lo_u16, _mm256_setzero_si256());
+                        let pixels_1 = _mm256_unpackhi_epi16(pixels_lo_u16, _mm256_setzero_si256());
+                        let pixels_2 = _mm256_unpacklo_epi16(pixels_hi_u16, _mm256_setzero_si256());
+                        let pixels_3 = _mm256_unpackhi_epi16(pixels_hi_u16, _mm256_setzero_si256());
+                        
+                        let weight = _mm256_set1_epi32(self.weights[i]);
+                        
+                        // Multiply and accumulate in 32-bit
+                        acc_0 = _mm256_add_epi32(acc_0, _mm256_mullo_epi32(pixels_0, weight));
+                        acc_1 = _mm256_add_epi32(acc_1, _mm256_mullo_epi32(pixels_1, weight));
+                        acc_2 = _mm256_add_epi32(acc_2, _mm256_mullo_epi32(pixels_2, weight));
+                        acc_3 = _mm256_add_epi32(acc_3, _mm256_mullo_epi32(pixels_3, weight));
+                    }
+                    
+                    // Shift right by 16 bits (divide by 65536)
+                    acc_0 = _mm256_srai_epi32(acc_0, 16);
+                    acc_1 = _mm256_srai_epi32(acc_1, 16);
+                    acc_2 = _mm256_srai_epi32(acc_2, 16);
+                    acc_3 = _mm256_srai_epi32(acc_3, 16);
+                    
+                    // Pack back to u16, then to u8
+                    let result_lo_u16 = _mm256_packus_epi32(acc_0, acc_1);
+                    let result_hi_u16 = _mm256_packus_epi32(acc_2, acc_3);
+                    
+                    // Pack u16 to u8 and combine
+                    let result_lo_u8 = _mm256_extracti128_si256(result_lo_u16, 0);
+                    let result_lo_u8_hi = _mm256_extracti128_si256(result_lo_u16, 1);
+                    let result_hi_u8 = _mm256_extracti128_si256(result_hi_u16, 0);
+                    let result_hi_u8_hi = _mm256_extracti128_si256(result_hi_u16, 1);
+                    
+                    let final_lo = _mm_packus_epi16(result_lo_u8, result_lo_u8_hi);
+                    let final_hi = _mm_packus_epi16(result_hi_u8, result_hi_u8_hi);
+                    
+                    // Store 32 pixels
+                    _mm_storeu_si128(dst_ptr.wrapping_add(w) as *mut __m128i, final_lo);
+                    _mm_storeu_si128(dst_ptr.wrapping_add(w + 16) as *mut __m128i, final_hi);
+                    
+                    w += 32;
+                }
+                
+                // Handle remaining pixels with scalar code
+                while w < width as usize {
+                    let mut acc = 0i64;
+                    for i in 0..num_srcs {
+                        let val = *frame_data_ptrs[i].wrapping_add(w);
+                        acc += (val as i32 * self.weights[i]) as i64;
+                    }
+                    let result = ((acc >> 16) as i32).clamp(0, 255) as u8;
+                    *dst_ptr.wrapping_add(w) = result;
+                    w += 1;
+                }
+                
+                // Move to next row
+                for i in 0..num_srcs {
+                    frame_data_ptrs[i] = frame_data_ptrs[i].wrapping_add(stride as usize);
+                }
+                dst_ptr = dst_ptr.wrapping_add(stride as usize);
+            }
+        }
+
+        #[target_feature(enable = "avx2")]
+        unsafe fn frame_blend_u16_avx2(&self, srcs: &Vec<Frame>, dst: &mut Frame, plane: i32) {
+            let height = dst.get_height(plane);
+            let stride = dst.get_stride(plane) / 2; // u16 stride
+            let width = dst.get_width(plane);
+            let num_srcs = self.weights.len();
+
+            let mut frame_data_ptrs = Vec::with_capacity(num_srcs);
+            for frame in srcs {
+                let data = frame.get_read_ptr(plane) as *const u16;
+                frame_data_ptrs.push(data);
+            }
+
+            let mut dst_ptr = dst.get_write_ptr(plane) as *mut u16;
+
+            for _h in 0..height {
+                let mut w = 0;
+                
+                // Process 16 pixels at a time with AVX2
+                while w + 16 <= width as usize {
+                    let mut acc_lo = _mm256_setzero_si256();
+                    let mut acc_hi = _mm256_setzero_si256();
+                    
+                    for i in 0..num_srcs {
+                        let src_ptr = frame_data_ptrs[i].wrapping_add(w);
+                        let pixels = _mm256_loadu_si256(src_ptr as *const __m256i);
+                        
+                        // Unpack u16 to u32 for processing
+                        let pixels_lo = _mm256_unpacklo_epi16(pixels, _mm256_setzero_si256());
+                        let pixels_hi = _mm256_unpackhi_epi16(pixels, _mm256_setzero_si256());
+                        
+                        let weight = _mm256_set1_epi32(self.weights[i]);
+                        
+                        // Multiply and accumulate
+                        acc_lo = _mm256_add_epi32(acc_lo, _mm256_mullo_epi32(pixels_lo, weight));
+                        acc_hi = _mm256_add_epi32(acc_hi, _mm256_mullo_epi32(pixels_hi, weight));
+                    }
+                    
+                    // Shift right by 16 bits (divide by 65536)
+                    acc_lo = _mm256_srai_epi32(acc_lo, 16);
+                    acc_hi = _mm256_srai_epi32(acc_hi, 16);
+                    
+                    // Pack back to u16
+                    let result = _mm256_packus_epi32(acc_lo, acc_hi);
+                    
+                    _mm256_storeu_si256(dst_ptr.wrapping_add(w) as *mut __m256i, result);
+                    
+                    w += 16;
+                }
+                
+                // Handle remaining pixels with scalar code
+                while w < width as usize {
+                    let mut acc = 0i64;
+                    for i in 0..num_srcs {
+                        let val = *frame_data_ptrs[i].wrapping_add(w);
+                        acc += (val as i32 * self.weights[i]) as i64;
+                    }
+                    let result = ((acc >> 16) as i32).clamp(0, 65535) as u16;
+                    *dst_ptr.wrapping_add(w) = result;
+                    w += 1;
+                }
+                
+                // Move to next row
+                for i in 0..num_srcs {
+                    frame_data_ptrs[i] = frame_data_ptrs[i].wrapping_add(stride as usize);
                 }
                 dst_ptr = dst_ptr.wrapping_add(stride as usize);
             }
