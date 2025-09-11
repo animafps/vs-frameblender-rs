@@ -8,6 +8,7 @@ use rustsynth::{
 use rustsynth_derive::vapoursynth_plugin;
 use std::cmp::max;
 use std::fmt::Debug;
+use std::arch::x86_64::*;
 
 #[vapoursynth_plugin]
 mod plugin {
@@ -127,7 +128,7 @@ mod plugin {
             let width = dst.get_width(plane);
             let num_srcs = self.weights.len();
 
-            let mut frame_data_ptrs = Vec::new();
+            let mut frame_data_ptrs = Vec::with_capacity(num_srcs);
             for frame in srcs {
                 let data = frame.get_read_ptr(plane) as *const T;
                 frame_data_ptrs.push(data);
@@ -135,15 +136,14 @@ mod plugin {
 
             let mut dst_ptr = dst.get_write_ptr(plane) as *mut T;
 
-            // Fallback scalar implementation
             let max_val = (1 << (size_of::<T>() * 8)) - 1;
             for _h in 0..height {
                 for w in 0..width as usize {
                     let mut acc = 0i64;
                     for i in 0..num_srcs {
                         unsafe {
-                            let val = (*frame_data_ptrs[i].wrapping_add(w)).into();
-                            acc += (val * self.weights[i]) as i64;
+                            let val = (*frame_data_ptrs.get_unchecked(i).wrapping_add(w)).into();
+                            acc += (val * *self.weights.get_unchecked(i)) as i64;
                         }
                     }
                     let actual_acc = ((acc >> 16) as i32).clamp(0, max_val);
@@ -154,7 +154,7 @@ mod plugin {
                     }
                 }
                 for i in 0..num_srcs {
-                    frame_data_ptrs[i] = frame_data_ptrs[i].wrapping_add(stride as usize);
+                    unsafe { frame_data_ptrs[i] = frame_data_ptrs.get_unchecked(i).wrapping_add(stride as usize) };
                 }
                 dst_ptr = dst_ptr.wrapping_add(stride as usize);
             }
