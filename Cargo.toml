@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rustsynth = {version = "=0.5.1", features = ["vapoursynth-functions"] }
-rustsynth-derive = "=0.5.1"
+rustsynth = {version = "=0.6.0", features=["proc-macro"]}
 
 [features]
 default = ["simd"]

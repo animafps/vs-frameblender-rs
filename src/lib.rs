@@ -1,11 +1,11 @@
 use rustsynth::{
+    vapoursynth_plugin,
     core::CoreRef,
-    filter::{traits::Filter, FilterDependency, FilterMode, RequestPattern},
+    filter::{Filter, FilterDependency, FilterMode, RequestPattern},
     frame::{Frame, FrameContext},
     map::Map,
     node::Node,
 };
-use rustsynth_derive::vapoursynth_plugin;
 use std::cmp::max;
 use std::fmt::Debug;
 use std::arch::x86_64::*;
@@ -24,8 +24,7 @@ fn is_avx2_available() -> bool {
 
 #[vapoursynth_plugin]
 mod plugin {
-    use rustsynth::{ffi, plugin::PluginConfigFlags, MakeVersion};
-    use rustsynth_derive::vapoursynth_filter;
+    use rustsynth::{ffi, plugin::PluginConfigFlags, MakeVersion, vapoursynth_filter};
 
     const NAMESPACE: &'static str = "frameblenderrs";
     const ID: &'static str = "nz.anima.frameblender";
@@ -76,11 +75,11 @@ mod plugin {
         fn get_dependencies(&self) -> Vec<FilterDependency> {
             vec![FilterDependency {
                 source: self.input_node.clone(),
-                request_pattern: RequestPattern::General,
+                request_pattern: RequestPattern::StrictSpatial,
             }]
         }
 
-        fn request_input_frames(&self, n: i32, frame_ctx: FrameContext) {
+        fn request_input_frames(&self, n: i32, frame_ctx: &FrameContext) {
             let clamp = n > i32::MAX - 1 - self.half;
             let lastframe = if clamp { i32::MAX - 1 } else { n + self.half };
             // request all the frames we'll need
@@ -93,7 +92,7 @@ mod plugin {
             &mut self,
             n: i32,
             _frame_data: &[u8; 4],
-            frame_ctx: FrameContext,
+            frame_ctx: &FrameContext,
             core: CoreRef<'core>,
         ) -> Result<Frame<'core>, String> {
             let mut frame_num = n - self.half;

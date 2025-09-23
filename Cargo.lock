@@ -345,33 +345,34 @@ dependencies = [
 
 [[package]]
 name = "rustsynth"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80d2b3bb35c707c4116ff2f327255f02858b86f02add0919a51777ae21f597d1"
+checksum = "712a555e96379efaf6cb3585b40547d9330e71cc9a705e5245057d7cb6067dcd"
 dependencies = [
- "bitflags 1.3.2",
+ "bitflags 2.9.4",
  "futures",
+ "log",
+ "rustsynth-derive",
  "rustsynth-sys",
  "thiserror",
 ]
 
 [[package]]
 name = "rustsynth-derive"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8ea97b9d8b5614904b4be95fa26ec2515b6ce3bfc21c4352ae220c36ccd07d3"
+checksum = "e08ba77e4ed258b06003b3ec1d65c792d66a4665623b034ad6a9a515fd203f94"
 dependencies = [
  "proc-macro2",
  "quote",
- "rustsynth",
  "syn 2.0.106",
 ]
 
 [[package]]
 name = "rustsynth-sys"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39b1ab2508069e30b012ef7a24f199edd9a1277ecd8ff585d711debd4df2d814"
+checksum = "29027bc31da6de3e7ab59e04c892d82b77cfb627415578c0474ac14ec8efb195"
 dependencies = [
  "bindgen",
 ]
@@ -412,18 +413,18 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.69"
+version = "2.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+checksum = "3467d614147380f2e4e374161426ff399c91084acd2363eaf549172b3d5e60c0"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "1.0.69"
+version = "2.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+checksum = "6c5e1be1c48b9172ee610da68fd9cd2770e7a4056cb3fc98710ee6906f0c7960"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -441,7 +442,6 @@ name = "vs-frameblender-rs"
 version = "0.1.0"
 dependencies = [
  "rustsynth",
- "rustsynth-derive",
 ]
 
 [[package]]
